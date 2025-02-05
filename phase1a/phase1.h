@@ -25,7 +25,6 @@
 
 #define MAXSYSCALLS  50
 
-
 /* 
  * These functions must be provided by Phase 1.
  */
@@ -74,24 +73,28 @@ extern void phase5_start_service_processes(void);
  */
 extern int testcase_main(void);
 
-
-
-#endif /* _PHASE1_H */
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <stdbool.h>
+// Process statuses
+#define NOTREADY     0
+#define READY        1
+#define RUNNING      2
+#define TERMINATED   3
 
 struct Process // all subject to change
 {
     int pid;
+    char name[MAXNAME];
+    int priority;
+    int status;
     int (*main_func)(void*); // I think that's how you make a function pointer haha
     struct Process *parent;
     struct Process *first_child;
     struct Process *following_sibling;
 };
 
+// global variable for process table
+extern Process processTable[MAXPROC];
+
+// Required functions
 void phase1_init(void);
 
 int spork(char *name, int (*startFunc)(void*), void *arg, int stackSize, int priority);
@@ -108,4 +111,5 @@ void dumpProcesses(void);
 
 void blockMe();
 
-int unblockProc(int pid);   
+int unblockProc(int pid);  
+#endif /* _PHASE1_H */
