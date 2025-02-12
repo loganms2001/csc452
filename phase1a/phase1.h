@@ -79,7 +79,7 @@ extern int testcase_main(void);
 #define RUNNING      2
 #define TERMINATED   3
 
-struct Process // all subject to change
+struct Process
 {
     int pid;
     char name[MAXNAME];
