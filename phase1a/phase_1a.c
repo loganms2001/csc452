@@ -60,6 +60,7 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	}
 
 	// look for empty slot in process table
+<<<<<<< Updated upstream
 	while (processTable[PID % MAXPROC]->status != AVAILABLE) {
 		PID++;
 	}
@@ -135,7 +136,7 @@ int join(int *status) { // need to audit
 	while (child) {
 		if (child->status == TERMINATED) {
 			// get the child's exit status
-			*status = child->status;
+			*status = child->exit_status;
 
 			int childPID = child->pid;
 
@@ -145,8 +146,6 @@ int join(int *status) { // need to audit
 			} else {
 				processTable[parentPID]->firstChild = child->nextSibling;
 			}
-
-			free(child->stack);
 			child->stack = NULL;
 
 			// mark as unused in process table
@@ -161,20 +160,67 @@ int join(int *status) { // need to audit
 	return -2;  // no children
 }
 
+// Phase1a implementation of quit() in 1b. Terminates the current process.
+// Takes 2 parameters
+// - status: exit status of this process. It will be returned to the parent through join()
+// - switchToPid: tells us which process to switch to after we clean up the process
 extern void quit_phase_1a(int status, int switchToPid) {
+	int pidToTerminate = PID;
 
+	// Get the current process so you can mark it TERMINATED
+	Process *currProcess = &processTable[pidToTerminate % MAXPROC];
+	curProcess->status = TERMINATED;
+	
+	// Should we halt if init process is trying to be terminated?
+	
+	// CONTEXT SWITCH TO NEXT PROCESS HERE
+	TEMP_switchTo(switchToPid);
+
+	// MAKE SURE THIS FUNCTION NEVER RETURNS
 }
 
+// Returns the current PID
 extern int  getpid(void) {
-
+	return PID;
 }
 
+// Prints summary of processes in the process table (pid, name, status, priority)
 extern void dumpProcesses(void) {
-
+	for (int i = 0; i < MAXPROC; i++) {
+		USLOSS_Console("PID: %d, Name: %s, Status: %d, Priority: %d\n",
+				processTable[i].pid, processTable[i].name,
+				processTable[i].status, processTable[i].priority);
+	}
 }
 
+// Calls USLOSS_ContextSwitch() to manually switch to the given process and
+// save the old process state
 void TEMP_switchTo(int pid) {
+	// Check if we are in kernel mode (NEED TO DO THIS IN EVERY REQUIRED FUNCTION)
+	if (USLOSS_PsrGet() != 1) {
+		USLOSS_Console("Error: Cannot call TEMP_switchTo() in user mode\n");
+		USLOSS_Halt(1);
+	}	
+	
+	// Check if newpid is valid
+	if (newpid < 0 || newpid >= MAXPROC || processTable[newpid].status == UNUSED) {
+		USLOSS_Console("Error: Invalid PID\n");
+		USLOSS_Halt(1);
+	}
 
+	// If everything checks out, continue to context switch
+	int oldPid = getpid();  // get pid that we are switching from
+	Process *oldProcess = &processTable[oldPid % MAXPROC];
+	Process *newProcess = &processTable[newpid % MAXPROC];
+
+	// UPDATE GLOBAL PID HERE
+	
+	// Context switch to new process and save old process state
+	USLOSS_ContextSwitch(&oldProcess->context, &newProcess->context);
+	
+	// Code should never get here
+	USLOSS_Console("Error: TEMP_switchTo() returned unexpectedly after context switch\n");
+	USLOSS_Halt(1);
 }
 
 ////////////////  HELPERS  ////////////////
@@ -223,4 +269,3 @@ void switch_context(unsigned int old_pid, int status, unsigned int new_pid) {
 	currentProcess->status = RUNNING;
 	USLOSS_ContextSwitch(processTable[old_pid]->context, currentProcess->context);
 }
-

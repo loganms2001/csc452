@@ -1,0 +1,4 @@
+Phase1_init(): Initialized init process with PID 1.
+Phase 1A TEMPORARY HACK: init() manually switching to PID 1.
+SIMULATOR TRAP: startup returned!
+
