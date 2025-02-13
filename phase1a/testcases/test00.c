@@ -14,7 +14,7 @@ int testcase_main()
     tm_pid = getpid();
 
     USLOSS_Console("testcase_main(): started\n");
-    USLOSS_Console("EXPECTATION: Simple spork()/join() should complete.\n");
+
 
     pid1 = spork("XXp1", XXp1, "XXp1", USLOSS_MIN_STACK, 2);
     USLOSS_Console("Phase 1A TEMPORARY HACK: Manually switching to the recently created XXp1()\n");
