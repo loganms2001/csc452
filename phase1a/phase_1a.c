@@ -4,14 +4,11 @@ Process processTable[MAXPROC];
 Process *currentProcess = NULL;
 int availableProcSlots = MAXPROC;
 int PID = 1;
-bool kernel = true;
+// bool kernel = true;
 
 void phase1_init(void) {
-	if (!kernel) {
-		USLOSS_Console("Error: not in kernel mode.\n");
-		USLOSS_Halt(1);
-	}
-	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false);
+	enter_kernel_mode();
+	unsigned int oldPsr = disable_interrupts();
 
 	// initialize all processes in process table with pid
 	for (int i = 0; i < MAXPROC; i++) {
@@ -45,7 +42,7 @@ void phase1_init(void) {
 	init->nextSibling = NULL;
 	init->nextRun = NULL;
 
-	USLOSS_PsrSet(oldPsr);
+	restore_psr_state(oldPsr);
 
 	availableProcSlots--;
 }
@@ -54,7 +51,8 @@ void phase1_init(void) {
 // - creates an entry in the process table and fills it before calling dispatcher
 // - if child is higher priority than parent, child will run before spork() returns
 int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int priority) {
-	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false); // disables ints
+	check_kernel_true(__func__);
+	unsigned int oldPsr = disable_interrupts();
 
 	// check for invalid args
 	if (strlen(name) > MAXNAME || !startFunc || priority > 5 || priority < 1) {
@@ -132,7 +130,7 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	// call dispatcher in 1b
 	// this would be responsible for disabling kernel mode
 
-	USLOSS_PsrSet(oldPsr); // restore psr
+	restore_psr_state(oldPsr);
 
 	return PID;  // return new process pid
 }
@@ -141,7 +139,8 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 // - (Phase 1a) In this phase, join() does not block. It returns if no terminated children are found
 // 	- also returns if parent has no children 
 int join(int *status) {
-	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false);
+	check_kernel_true(__func__);
+	unsigned int oldPsr = disable_interrupts();
 
 	// check for invalid status
 	if (status == NULL) {
@@ -149,7 +148,7 @@ int join(int *status) {
 	}
 
 	// check for no children
-	if (currentProcess->firstChild == NULL) {
+	if (check_no_children()) {
 		return -2;
 	}
 
@@ -177,14 +176,15 @@ int join(int *status) {
 
 	*status = curChild->exitStatus;
 
-	USLOSS_PsrSet(oldPsr);
+	restore_psr_state(oldPsr);
 
 	return curChild->pid;
 }
 
 extern void quit_phase_1a(int status, int switchToPid) {
-	if (!kernel) {
-		USLOSS_Console("Error: not in kernel mode.\n");
+	check_kernel_true(__func__);
+	if (!check_no_children()) {
+		USLOSS_Console("Error: cannot proceed with living children.\n");
 		USLOSS_Halt(1);
 	}
 	currentProcess->exitStatus = status;
@@ -214,16 +214,22 @@ extern void dumpProcesses(void) {
 }
 
 void TEMP_switchTo(int pid) {
+	check_kernel_true(__func__);
 	switch_context(PID, READY, pid);
 }
 
 ////////////////  HELPERS  ////////////////
 
 int init_entry(void *) {
-	kernel = true;
-
+	enter_kernel_mode();
+	phase2_start_service_processes();
+	phase3_start_service_processes();
+	phase4_start_service_processes();
+	phase5_start_service_processes();
 	int newPid = spork("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 3);
+	USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.\n");
 	switch_context(currentProcess->pid, READY, newPid);
+	// dispatcher called in spork
 	int status = 0;
 	while (true) {
 		if (join(&status) == -2) {
@@ -236,30 +242,16 @@ int init_entry(void *) {
 	return -99; // doesn't run
 }
 
-// USLOSS_PSR_CURRENT_MODE
-// USLOSS_PSR_CURRENT_INT
-unsigned int set_psr_flag(unsigned int flag, bool on) {
-	unsigned int oldPsr = USLOSS_PsrGet();
-	unsigned int newPsr;
-	if (on) {
-		newPsr = oldPsr | flag;
-	} else {
-		newPsr = oldPsr & ~flag;
-	}
-	USLOSS_PsrSet(newPsr);
-	return oldPsr;
-}
-
 void func_wrapper(void) {
-	kernel = false;
+	unsigned int oldPsr = enable_interrupts();
 	int returncode = currentProcess->startFunc(currentProcess->arg);
-	kernel = true;
+	restore_psr_state(oldPsr);
+	USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
 	quit_phase_1a(returncode, currentProcess->parent->pid);
 }
 
 void switch_context(int old_pid, int status, int newPid) {
-	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false); // disable ints
-
+	check_kernel_true(__func__);
 	USLOSS_Context *old_context;
 	if (currentProcess != NULL) {
 		old_context = &currentProcess->context;
@@ -271,6 +263,54 @@ void switch_context(int old_pid, int status, int newPid) {
 	currentProcess = &processTable[newPid % MAXPROC];
 	currentProcess->status = RUNNING;
 
-	USLOSS_PsrSet(oldPsr); // restore before switching contexts
 	USLOSS_ContextSwitch(old_context, &currentProcess->context);
+}
+
+unsigned int disable_interrupts() {
+	return set_psr_flag(USLOSS_PSR_CURRENT_INT, false);
+}
+
+unsigned int enable_interrupts() {
+	return set_psr_flag(USLOSS_PSR_CURRENT_INT, true);
+}
+
+void restore_psr_state(unsigned int oldPsr) {
+	int result = USLOSS_PsrSet(oldPsr);
+	if (result != USLOSS_DEV_OK) {
+		USLOSS_Console("PsrSet returned %d.\n", result);
+		USLOSS_Halt(1);
+	}
+}
+
+// USLOSS_PSR_CURRENT_MODE
+// USLOSS_PSR_CURRENT_INT
+unsigned int set_psr_flag(unsigned int flag, bool on) {
+	unsigned int oldPsr = USLOSS_PsrGet();
+	unsigned int newPsr;
+	if (on) {
+		newPsr = oldPsr | flag;
+	} else {
+		newPsr = oldPsr & ~flag;
+	}
+	int result = USLOSS_PsrSet(newPsr);
+	if (result != USLOSS_DEV_OK) {
+		USLOSS_Console("PsrSet returned %d.\n", result);
+		USLOSS_Halt(1);
+	}
+	return oldPsr;
+}
+
+bool check_no_children() {
+	return (currentProcess->firstChild == NULL);
+}
+
+void check_kernel_true(const char *func_name) {
+	if ((USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE) == 0) {
+		USLOSS_Console("Error: Someone attempted to call %s while in user mode!\n", func_name);
+		USLOSS_Halt(1);
+	}
+}
+
+void enter_kernel_mode() {
+	set_psr_flag(USLOSS_PSR_CURRENT_MODE, true);
 }

@@ -103,8 +103,14 @@ typedef struct process {
 
 // helper functions
 extern int init_entry(void *);
-unsigned int set_psr_flag(unsigned int flag, bool on);
 extern void func_wrapper(void);
 void switch_context(int old_pid, int status, int new_pid);
+unsigned int set_psr_flag(unsigned int flag, bool on);
+unsigned int disable_interrupts(void);
+unsigned int enable_interrupts(void);
+void restore_psr_state(unsigned int);
+void check_kernel_true(const char *);
+bool check_no_children(void);
+void enter_kernel_mode(void);
 
 #endif // _PHASE1_H
