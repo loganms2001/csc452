@@ -1,39 +1,51 @@
 #include "phase1.h"
 
-struct Process *processTable[MAXPROC];
+Process processTable[MAXPROC];
 Process *currentProcess = NULL;
 int availableProcSlots = MAXPROC;
-unsigned int PID = 1;
+int PID = 1;
+bool kernel = true;
 
 void phase1_init(void) {
+	if (!kernel) {
+		USLOSS_Console("Error: not in kernel mode.\n");
+		USLOSS_Halt(1);
+	}
+	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false);
+
 	// initialize all processes in process table with pid
 	for (int i = 0; i < MAXPROC; i++) {
-		processTable[i]->pid = PID_UNUSED;
-		processTable[i]->status = AVAILABLE;
+		processTable[i].pid = PID_UNUSED;
+		processTable[i].status = AVAILABLE;
 	}
+	
+	Process *init = &processTable[1];
 
 	// Initialize init process (PID 1)
 	int stackSize = USLOSS_MIN_STACK;
 	void *stack = malloc(stackSize);
+
 	USLOSS_PTE *pageTable = phase5_mmu_pageTable_alloc(PID);
-	USLOSS_Context *context;
-	USLOSS_ContextInit(context, stack, stackSize, pageTable, func_wrapper);
+	USLOSS_ContextInit(&init->context, stack, stackSize, pageTable, func_wrapper);
 
-	strcpy(processTable[PID]->name, "init");
-	processTable[PID]->pid = PID;
-	processTable[PID]->priority = 6; // priority for init
-	processTable[PID]->status = READY;
-	processTable[PID]->stackSize = stackSize;
-	processTable[PID]->stack = stack;
-	processTable[PID]->startFunc = init_entry;
-	processTable[PID]->arg = NULL;
+	strncpy(init->name, "init", MAXNAME);
+	init->pid = PID;
+	init->priority = 6; // priority for init
+	init->status = READY;
+	init->exitStatus = -99;
+	init->stackSize = stackSize;
+	init->stack = stack;
+	init->startFunc = init_entry;
+	init->arg = NULL;
 
-	processTable[PID]->context = context;
+	// context defined above
 
-	processTable[PID]->parent = NULL;
-	processTable[PID]->firstChild = NULL;
-	processTable[PID]->nextSibling = NULL;
-	processTable[PID]->nextRun = NULL;
+	init->parent = NULL;
+	init->firstChild = NULL;
+	init->nextSibling = NULL;
+	init->nextRun = NULL;
+
+	USLOSS_PsrSet(oldPsr);
 
 	availableProcSlots--;
 }
@@ -42,6 +54,8 @@ void phase1_init(void) {
 // - creates an entry in the process table and fills it before calling dispatcher
 // - if child is higher priority than parent, child will run before spork() returns
 int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int priority) {
+	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false); // disables ints
+
 	// check for invalid args
 	if (strlen(name) > MAXNAME || !startFunc || priority > 5 || priority < 1) {
 		// error message?
@@ -60,29 +74,31 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	}
 
 	// look for empty slot in process table
-	while (processTable[PID % MAXPROC]->status != AVAILABLE) {
+	while (processTable[PID % MAXPROC].status != AVAILABLE) {
 		PID++;
 	}
+
+	Process *newProc = &processTable[PID % MAXPROC];
 
 	// complete process table entry
 	void *stack = malloc(stackSize);
 	USLOSS_PTE *pageTable = phase5_mmu_pageTable_alloc(PID);
-	USLOSS_Context *context;
-	USLOSS_ContextInit(context, stack, stackSize, pageTable, func_wrapper);
+	USLOSS_ContextInit(&newProc->context, stack, stackSize, pageTable, func_wrapper);
 
-	strncpy(processTable[PID]->name, name, MAXNAME);
-	processTable[PID]->pid = PID;
-	processTable[PID]->priority = priority;
-	processTable[PID]->status = READY;
-	processTable[PID]->stackSize = stackSize;
-	processTable[PID]->stack = stack;
-	processTable[PID]->startFunc = startFunc;
-	processTable[PID]->arg = arg;
+	strncpy(newProc->name, name, MAXNAME);
+	newProc->pid = PID;
+	newProc->priority = priority;
+	newProc->status = READY;
+	newProc->exitStatus = -99;
+	newProc->stackSize = stackSize;
+	newProc->stack = stack;
+	newProc->startFunc = startFunc;
+	newProc->arg = arg;
 
-	processTable[PID]->context = context;
+	// context defined above
 
-	processTable[PID]->parent = currentProcess;
-	processTable[PID]->firstChild = NULL;
+	newProc->parent = currentProcess;
+	newProc->firstChild = NULL;
 	// nextSibling is defined below
 	// nextRun is defined below
 	
@@ -90,29 +106,33 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	
 	// inserts at head
 	Process *temp = currentProcess->firstChild;
-	currentProcess->firstChild = processTable[PID];
-	processTable[PID]->firstChild = temp;
+	currentProcess->firstChild = &processTable[PID % MAXPROC];
+	currentProcess->firstChild->nextSibling = temp;
 	
 	// inserts at tail
-	// processTable[PID]->nextSibling = NULL;
-	// Process *child = currentProcess->firstChild;
+	// processTable[PID%MAXPROC].nextSibling = NULL;
+	// Process child = currentProcess->firstChild;
 	// while (child != NULL) {
 		// 	child = child->nextSibling;
 		// }
-		// child->nextSibling = processTable[PID];
-		
-	Process *cur = NULL;
-	Process *next = currentProcess;
-	while (next->priority >= priority) {
-		cur = next;
-		next = next->nextRun;
-	}
-	if (cur != NULL) {
-		cur->nextRun = processTable[PID];
-	}
-	processTable[PID]->nextRun = next;
-
+		// child->nextSibling = processTable[PID%MAXPROC];
+	
+	// Process *cur = NULL;
+	// Process *next = currentProcess;
+	// while (next != NULL && next->priority >= priority) {
+	// 	cur = next;
+	// 	next = next->nextRun;
+	// }
+	
+	// if (cur != NULL) {
+	// 	cur->nextRun = &processTable[PID % MAXPROC];
+	// }
+	// cur->nextRun->nextRun = next;
+	
 	// call dispatcher in 1b
+	// this would be responsible for disabling kernel mode
+
+	USLOSS_PsrSet(oldPsr); // restore psr
 
 	return PID;  // return new process pid
 }
@@ -120,107 +140,137 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 // Blocks the current process, until one of its children terminates and recieves its exit status.
 // - (Phase 1a) In this phase, join() does not block. It returns if no terminated children are found
 // 	- also returns if parent has no children 
-int join(int *status) { // need to audit
+int join(int *status) {
+	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false);
+
 	// check for invalid status
 	if (status == NULL) {
 		return -3;
 	}
 
-	int parentPID = getpid();
-	// use child and previous child to look for terminated children
-	Process *child = processTable[parentPID]->firstChild;
-	Process *previousChild = NULL;
-
-	// look for terminated child
-	while (child) {
-		if (child->status == TERMINATED) {
-			// get the child's exit status
-			*status = child->status;
-
-			int childPID = child->pid;
-
-			// remove child
-			if (previousChild) {
-				previousChild->nextSibling = child->nextSibling;
-			} else {
-				processTable[parentPID]->firstChild = child->nextSibling;
-			}
-
-			free(child->stack);
-			child->stack = NULL;
-
-			// mark as unused in process table
-			child->pid = -1;
-			child->status = PID_UNUSED;
-			return childPID;
-		}
-		previousChild = child;
-		child = child->nextSibling;
+	// check for no children
+	if (currentProcess->firstChild == NULL) {
+		return -2;
 	}
+
+	// Process runsBefore = NULL; // will have to deal with this later
+	Process *prevChild = NULL;
+	Process *curChild = currentProcess->firstChild;
+	while (curChild->nextSibling != NULL && curChild->status != TERMINATED) {
+		prevChild = curChild;
+		curChild = curChild->nextSibling;
+	}
+	// if (curChild == NULL) blockMe();
 	
-	return -2;  // no children
+	if (prevChild == NULL) {
+		currentProcess->firstChild = curChild->nextSibling;
+	} else {
+		prevChild->nextSibling = curChild->nextSibling;
+	}
+	// Process childNextRun = curChild->nextRun; // later
+	
+	free(curChild->stack);
+
+	curChild->status = AVAILABLE;
+
+	availableProcSlots++;
+
+	*status = curChild->exitStatus;
+
+	USLOSS_PsrSet(oldPsr);
+
+	return curChild->pid;
 }
 
 extern void quit_phase_1a(int status, int switchToPid) {
-
+	if (!kernel) {
+		USLOSS_Console("Error: not in kernel mode.\n");
+		USLOSS_Halt(1);
+	}
+	currentProcess->exitStatus = status;
+	switch_context(currentProcess->pid, TERMINATED, switchToPid);
 }
 
-extern int  getpid(void) {
-
+extern int getpid(void) {
+	return currentProcess->pid;
 }
 
 extern void dumpProcesses(void) {
-
+	Process *p = currentProcess; // to make it shorter
+	int sibPid;
+	if (p->nextSibling != NULL) {
+		sibPid = p->nextSibling->pid;
+	} else {
+		sibPid = -99;
+	}
+	int childPid;
+	if (p->firstChild != NULL) {
+		childPid = p->firstChild->pid;
+	} else {
+		childPid = -99;
+	}
+	USLOSS_Console("Name: %s\nPID: %d\nP-PID: %d\nS-PID: %d\nC-PID: %d\nPriority: %d\n Status: %d\n", 
+		p->name, p->pid, p->parent->pid, sibPid, childPid, p->priority, p->status);
 }
 
 void TEMP_switchTo(int pid) {
-
+	switch_context(PID, READY, pid);
 }
 
 ////////////////  HELPERS  ////////////////
 
 int init_entry(void *) {
-	int new_pid = spork("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 3);
-	switch_context(currentProcess->pid, READY, new_pid);
+	kernel = true;
+
+	int newPid = spork("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 3);
+	switch_context(currentProcess->pid, READY, newPid);
+	int status = 0;
 	while (true) {
-		// join and check for -2
+		if (join(&status) == -2) {
+			if (status != 0) {
+				USLOSS_Console("Error: exited with status %d\n", status);
+			}
+			USLOSS_Halt(status);
+		}
 	}
-	return 0; // ?
+	return -99; // doesn't run
 }
 
 // USLOSS_PSR_CURRENT_MODE
 // USLOSS_PSR_CURRENT_INT
 unsigned int set_psr_flag(unsigned int flag, bool on) {
-	unsigned int old_psr = USLOSS_PsrGet();
-	unsigned int new_psr;
+	unsigned int oldPsr = USLOSS_PsrGet();
+	unsigned int newPsr;
 	if (on) {
-		new_psr = old_psr | flag;
+		newPsr = oldPsr | flag;
 	} else {
-		new_psr = old_psr & ~flag;
+		newPsr = oldPsr & ~flag;
 	}
-	int set_result = USLOSS_PsrSet(new_psr);
-	if (set_result == -1) {
-		return set_result; // ignore, getting rid of warnings
-	}
-	return old_psr;
+	USLOSS_PsrSet(newPsr);
+	return oldPsr;
 }
 
 void func_wrapper(void) {
-	int returncode;
-	void *arg = currentProcess->arg;
-	if (arg != NULL) {
-		returncode = currentProcess->startFunc(currentProcess->arg);
+	kernel = false;
+	int returncode = currentProcess->startFunc(currentProcess->arg);
+	kernel = true;
+	quit_phase_1a(returncode, currentProcess->parent->pid);
+}
+
+void switch_context(int old_pid, int status, int newPid) {
+	unsigned int oldPsr = set_psr_flag(USLOSS_PSR_CURRENT_INT, false); // disable ints
+
+	USLOSS_Context *old_context;
+	if (currentProcess != NULL) {
+		old_context = &currentProcess->context;
+		currentProcess->status = status;
 	} else {
-		returncode = currentProcess->startFunc(NULL);
+		old_context = NULL;
 	}
-	quit_phase_1a(returncode, -1); // should not run in 1a... maybe look through discord
-}
-
-void switch_context(unsigned int old_pid, int status, unsigned int new_pid) {
-	currentProcess->status = status;
 	// insert at tail of run queue
-	currentProcess = processTable[new_pid];
+	currentProcess = &processTable[newPid % MAXPROC];
 	currentProcess->status = RUNNING;
-	USLOSS_ContextSwitch(processTable[old_pid]->context, currentProcess->context);
-}
 
+	USLOSS_PsrSet(oldPsr); // restore before switching contexts
+	USLOSS_ContextSwitch(old_context, &currentProcess->context);
+}

@@ -84,26 +84,27 @@ extern int testcase_main(void);
 #define PID_UNUSED  -1
 
 // Process structure
-typedef struct Process {
-    unsigned int pid;
+typedef struct process {
+    int pid;
     char name[MAXNAME];
     int priority;
     int status;
+    int exitStatus;
     int stackSize;
     void *stack;
     int (*startFunc)(void *);
     void *arg;
-    USLOSS_Context *context;
-    struct Process *parent;
-    struct Process *firstChild;
-    struct Process *nextSibling;
-    struct Process *nextRun;
+    USLOSS_Context context;
+    struct process *parent;
+    struct process *firstChild;
+    struct process *nextSibling;
+    struct process *nextRun;
 } Process;
 
 // helper functions
-int init_entry(void *);
+extern int init_entry(void *);
 unsigned int set_psr_flag(unsigned int flag, bool on);
-void func_wrapper(void);
-void switch_context(unsigned int old_pid, int status, unsigned int new_pid);
+extern void func_wrapper(void);
+void switch_context(int old_pid, int status, int new_pid);
 
 #endif // _PHASE1_H
