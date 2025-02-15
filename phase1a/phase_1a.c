@@ -1,12 +1,18 @@
-#include "phase1.h"
+/*
+* Authors: Logan Sandlin and Christopher Le
+* Phase 1-a
+*
+*/
+
+#include "logchow.h"
 
 Process processTable[MAXPROC];
 Process *currentProcess = NULL;
 int availableProcSlots = MAXPROC;
 int PID = 1;
-// bool kernel = true;
 
-void phase1_init(void) {
+/// @brief Initial invocation is here. Creates init process.
+void phase1_init() {
 	enter_kernel_mode();
 	unsigned int oldPsr = disable_interrupts();
 
@@ -46,22 +52,26 @@ void phase1_init(void) {
 	availableProcSlots--;
 }
 
-// Creates a new process, which is a child of the currently running process
-// - creates an entry in the process table and fills it before calling dispatcher
-// - if child is higher priority than parent, child will run before spork() returns
+
+/// @brief Creates a new process, which is the child of the current running process, 
+///			then calls dispatcher (not yet though).
+/// @param name Name of new process
+/// @param startFunc Entry point of new process
+/// @param arg Arg for new process entry
+/// @param stackSize Size of stack fo process
+/// @param priority Priority 1-5 of new process
+/// @return PID of new process
 int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int priority) {
 	check_kernel_true(__func__);
 	unsigned int oldPsr = disable_interrupts();
 
 	// check for invalid args
 	if (strlen(name) > MAXNAME || !startFunc || priority > 5 || priority < 1) {
-		// error message?
 		return -1;
 	}
 
 	// check to make sure there is room in the process table
 	if (availableProcSlots < 1) {
-		// error message?
 		return -1;
 	}
 
@@ -105,38 +115,18 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	Process *temp = currentProcess->firstChild;
 	currentProcess->firstChild = &processTable[PID % MAXPROC];
 	currentProcess->firstChild->nextSibling = temp;
-	
-	// inserts at tail
-	// processTable[PID%MAXPROC].nextSibling = NULL;
-	// Process child = currentProcess->firstChild;
-	// while (child != NULL) {
-		// 	child = child->nextSibling;
-		// }
-		// child->nextSibling = processTable[PID%MAXPROC];
-	
-	// Process *cur = NULL;
-	// Process *next = currentProcess;
-	// while (next != NULL && next->priority >= priority) {
-	// 	cur = next;
-	// 	next = next->nextRun;
-	// }
-	
-	// if (cur != NULL) {
-	// 	cur->nextRun = &processTable[PID % MAXPROC];
-	// }
-	// cur->nextRun->nextRun = next;
-	
-	// call dispatcher in 1b
-	// this would be responsible for disabling kernel mode
 
 	restore_psr_state(oldPsr);
 
-	return PID;  // return new process pid
+	return newProc->pid;  // return new process pid
 }
 
-// Blocks the current process, until one of its children terminates and recieves its exit status.
-// - (Phase 1a) In this phase, join() does not block. It returns if no terminated children are found
-// 	- also returns if parent has no children 
+/// @brief Waits for a child to terminate and cleans up the child (doesn't block yet).
+/// @param status Out pointer to exit status
+/// @return Dead child's pid
+///			if error:
+///				-3 for invalid out pointer
+///				-2 for no children
 int join(int *status) {
 	check_kernel_true(__func__);
 	unsigned int oldPsr = disable_interrupts();
@@ -151,28 +141,22 @@ int join(int *status) {
 		return -2;
 	}
 
-	// Process runsBefore = NULL; // will have to deal with this later
 	Process *prevChild = NULL;
 	Process *curChild = currentProcess->firstChild;
 	while (curChild->nextSibling != NULL && curChild->status != TERMINATED) {
 		prevChild = curChild;
 		curChild = curChild->nextSibling;
 	}
-	// if (curChild == NULL) blockMe();
 	
 	if (prevChild == NULL) {
 		currentProcess->firstChild = curChild->nextSibling;
 	} else {
 		prevChild->nextSibling = curChild->nextSibling;
 	}
-	// Process childNextRun = curChild->nextRun; // later
 	
 	free(curChild->stack);
-
 	curChild->status = AVAILABLE;
-
 	availableProcSlots++;
-
 	*status = curChild->exitStatus;
 
 	restore_psr_state(oldPsr);
@@ -180,6 +164,10 @@ int join(int *status) {
 	return curChild->pid;
 }
 
+/// @brief Exits current running process / changes status to terminated and transfers control
+///			to switchToPid (will call dispatcher).
+/// @param status Status to exit process with
+/// @param switchToPid TEMP PID to switch to after process is complete
 extern void quit_phase_1a(int status, int switchToPid) {
 	check_kernel_true(__func__);
 	if (!check_no_children()) {
@@ -190,9 +178,12 @@ extern void quit_phase_1a(int status, int switchToPid) {
 	switch_context(currentProcess->pid, TERMINATED, switchToPid);
 }
 
-extern int getpid(void) {
+/// @brief Returns PID of current process.
+/// @return Current PID
+extern int getpid() {
 	return currentProcess->pid;
 }
+
 
 // EXAMPLE: 
 // PID  PPID  NAME              PRIORITY  STATE
@@ -200,7 +191,9 @@ extern int getpid(void) {
 // 2     1  testcase_main     3         Running
 // 3     2  XXp1              2         Terminated(3)
 // 4     2  XXp1              2         Terminated(4)
-extern void dumpProcesses(void) {
+
+/// @brief Prints current active processtable
+extern void dumpProcesses() {
 	char state[32];
 	char name_indent[32];
 	int ind_len;
@@ -254,6 +247,8 @@ extern void dumpProcesses(void) {
 	}
 }
 
+/// @brief Switches contexts to the given function
+/// @param pid PID of the function to switch to
 void TEMP_switchTo(int pid) {
 	check_kernel_true(__func__);
 	switch_context(PID, READY, pid);
@@ -261,15 +256,21 @@ void TEMP_switchTo(int pid) {
 
 ////////////////  HELPERS  ////////////////
 
+/// @brief Entry function for init process
+/// @param  UNUSED No param is passed to init
+/// @return Should never return
 int init_entry(void *) {
 	enter_kernel_mode();
+
 	phase2_start_service_processes();
 	phase3_start_service_processes();
 	phase4_start_service_processes();
 	phase5_start_service_processes();
+
 	int newPid = spork("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 3);
 	USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.\n");
 	switch_context(currentProcess->pid, READY, newPid);
+	
 	// dispatcher called in spork
 	int status = 0;
 	while (true) {
@@ -283,7 +284,9 @@ int init_entry(void *) {
 	return -99; // doesn't run
 }
 
-void func_wrapper(void) {
+/// @brief Wrapper for catching function returns in functions called by USLOSS. Temp since 
+///			testcase returns.
+void func_wrapper() {
 	unsigned int oldPsr = enable_interrupts();
 	int returncode = currentProcess->startFunc(currentProcess->arg);
 	restore_psr_state(oldPsr);
@@ -291,6 +294,10 @@ void func_wrapper(void) {
 	quit_phase_1a(returncode, currentProcess->parent->pid);
 }
 
+/// @brief Switches contexts from old PID to new
+/// @param old_pid Old PID
+/// @param status Status to switch the old process to
+/// @param newPid New PID
 void switch_context(int old_pid, int status, int newPid) {
 	check_kernel_true(__func__);
 	USLOSS_Context *old_context;
@@ -307,14 +314,20 @@ void switch_context(int old_pid, int status, int newPid) {
 	USLOSS_ContextSwitch(old_context, &currentProcess->context);
 }
 
+/// @brief Disables interrupts.
+/// @return The old psr
 unsigned int disable_interrupts() {
 	return set_psr_flag(USLOSS_PSR_CURRENT_INT, false);
 }
 
+/// @brief Enables interrupts.
+/// @return The old psr
 unsigned int enable_interrupts() {
 	return set_psr_flag(USLOSS_PSR_CURRENT_INT, true);
 }
 
+/// @brief Restores PSR.
+/// @param oldPsr Previous PSR state
 void restore_psr_state(unsigned int oldPsr) {
 	int result = USLOSS_PsrSet(oldPsr);
 	if (result != USLOSS_DEV_OK) {
@@ -323,8 +336,10 @@ void restore_psr_state(unsigned int oldPsr) {
 	}
 }
 
-// USLOSS_PSR_CURRENT_MODE
-// USLOSS_PSR_CURRENT_INT
+/// @brief Sets a given PSR flag to the bool given.
+/// @param flag Flag to set
+/// @param on On or off
+/// @return Old PSR
 unsigned int set_psr_flag(unsigned int flag, bool on) {
 	unsigned int oldPsr = USLOSS_PsrGet();
 	unsigned int newPsr;
@@ -338,10 +353,14 @@ unsigned int set_psr_flag(unsigned int flag, bool on) {
 	return oldPsr;
 }
 
+/// @brief Checks to make sure there are no children of current process
+/// @return Bool of children
 bool check_no_children() {
 	return (currentProcess->firstChild == NULL);
 }
 
+/// @brief Exits with an error code if in user mode
+/// @param func_name Name for error message
 void check_kernel_true(const char *func_name) {
 	if ((USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE) == 0) {
 		USLOSS_Console("ERROR: Someone attempted to call %s while in user mode!\n", func_name);
@@ -349,6 +368,7 @@ void check_kernel_true(const char *func_name) {
 	}
 }
 
+/// @brief Sets kernel mode flag true
 void enter_kernel_mode() {
 	set_psr_flag(USLOSS_PSR_CURRENT_MODE, true);
 }
