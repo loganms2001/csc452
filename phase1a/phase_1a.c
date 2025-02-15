@@ -12,7 +12,6 @@ void phase1_init(void) {
 
 	// initialize all processes in process table with pid
 	for (int i = 0; i < MAXPROC; i++) {
-		processTable[i].pid = PID_UNUSED;
 		processTable[i].status = AVAILABLE;
 	}
 	
@@ -29,7 +28,7 @@ void phase1_init(void) {
 	init->pid = PID;
 	init->priority = 6; // priority for init
 	init->status = READY;
-	init->exitStatus = -99;
+	init->exitStatus = 0xBEEF;
 	init->stackSize = stackSize;
 	init->stack = stack;
 	init->startFunc = init_entry;
@@ -87,7 +86,7 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	newProc->pid = PID;
 	newProc->priority = priority;
 	newProc->status = READY;
-	newProc->exitStatus = -99;
+	newProc->exitStatus = 0xBEEF;
 	newProc->stackSize = stackSize;
 	newProc->stack = stack;
 	newProc->startFunc = startFunc;
@@ -184,7 +183,7 @@ int join(int *status) {
 extern void quit_phase_1a(int status, int switchToPid) {
 	check_kernel_true(__func__);
 	if (!check_no_children()) {
-		USLOSS_Console("Error: cannot proceed with living children.\n");
+		USLOSS_Console("ERROR: cannot proceed with living children.\n");
 		USLOSS_Halt(1);
 	}
 	currentProcess->exitStatus = status;
@@ -195,22 +194,64 @@ extern int getpid(void) {
 	return currentProcess->pid;
 }
 
+// EXAMPLE: 
+// PID  PPID  NAME              PRIORITY  STATE
+// 1     0  init              6         Runnable
+// 2     1  testcase_main     3         Running
+// 3     2  XXp1              2         Terminated(3)
+// 4     2  XXp1              2         Terminated(4)
 extern void dumpProcesses(void) {
-	Process *p = currentProcess; // to make it shorter
-	int sibPid;
-	if (p->nextSibling != NULL) {
-		sibPid = p->nextSibling->pid;
-	} else {
-		sibPid = -99;
+	char state[32];
+	char name_indent[32];
+	int ind_len;
+	USLOSS_Console(" PID  PPID  NAME              PRIORITY  STATE\n");
+	for (int i = 0; i < MAXPROC; i++) {
+		Process p = processTable[i];
+		if (p.status == AVAILABLE) continue;
+		ind_len = 18 - strlen(p.name);
+		memset(name_indent, ' ', ind_len);
+		name_indent[ind_len] = '\0';
+		switch (p.status)
+		{
+		case READY:
+			strncpy(state, "Runnable", 16);
+		break;
+
+		case RUNNING:
+			strncpy(state, "Running", 16);
+		break;
+
+		case TERMINATED:
+			sprintf(state, "Terminated(%d)", processTable[i].exitStatus);
+		break;
+
+		default:
+			strncpy(state, "UNUSED", 16);
+			break;
+		}
+		int ppid;
+		if (p.parent == NULL) {
+			ppid = 0;
+		} else {
+			ppid = p.parent->pid;
+		}
+		char pid_ind[] = {'\0', '\0', '\0'};
+		if (p.pid < 10) {
+			pid_ind[0] = ' ';
+		}
+		if (p.pid < 1000) {
+			pid_ind[1] = ' ';
+		}
+		char ppid_ind[] = {'\0', '\0', '\0'};
+		if (ppid < 10) {
+			ppid_ind[0] = ' ';
+		}
+		if (ppid < 1000) {
+			ppid_ind[1] = ' ';
+		}
+		USLOSS_Console(" %s%d     %d%s %s%s%d         %s\n",
+			pid_ind, p.pid, ppid, ppid_ind, p.name, name_indent, p.priority, state);
 	}
-	int childPid;
-	if (p->firstChild != NULL) {
-		childPid = p->firstChild->pid;
-	} else {
-		childPid = -99;
-	}
-	USLOSS_Console("Name: %s\nPID: %d\nP-PID: %d\nS-PID: %d\nC-PID: %d\nPriority: %d\n Status: %d\n", 
-		p->name, p->pid, p->parent->pid, sibPid, childPid, p->priority, p->status);
 }
 
 void TEMP_switchTo(int pid) {
@@ -234,7 +275,7 @@ int init_entry(void *) {
 	while (true) {
 		if (join(&status) == -2) {
 			if (status != 0) {
-				USLOSS_Console("Error: exited with status %d\n", status);
+				USLOSS_Console("ERROR: exited with status %d\n", status);
 			}
 			USLOSS_Halt(status);
 		}
@@ -246,7 +287,7 @@ void func_wrapper(void) {
 	unsigned int oldPsr = enable_interrupts();
 	int returncode = currentProcess->startFunc(currentProcess->arg);
 	restore_psr_state(oldPsr);
-	USLOSS_Console("Phase 1A TEMPORARY HACK: testcase_main() returned, simulation will now halt.\n");
+	USLOSS_Console("Phase 1A TEMPORARY HACK: %s() returned, simulation will now halt.\n", currentProcess->name);
 	quit_phase_1a(returncode, currentProcess->parent->pid);
 }
 
@@ -306,7 +347,7 @@ bool check_no_children() {
 
 void check_kernel_true(const char *func_name) {
 	if ((USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE) == 0) {
-		USLOSS_Console("Error: Someone attempted to call %s while in user mode!\n", func_name);
+		USLOSS_Console("ERROR: Someone attempted to call %s while in user mode!\n", func_name);
 		USLOSS_Halt(1);
 	}
 }

@@ -73,15 +73,12 @@ extern int testcase_main(void);
 // Chow and Logan definitions
 
 // Process statuses
-#define BLOCKED      -2
-#define NOT_READY     -1
+// #define NOT_READY     -1
+#define BLOCKED      -1
 #define READY        0
 #define RUNNING      1
 #define TERMINATED   2
 #define AVAILABLE    3
-
-// other defs
-#define PID_UNUSED  -1
 
 // Process structure
 typedef struct process {
