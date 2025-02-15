@@ -183,7 +183,7 @@ int join(int *status) {
 extern void quit_phase_1a(int status, int switchToPid) {
 	check_kernel_true(__func__);
 	if (!check_no_children()) {
-		USLOSS_Console("ERROR: cannot proceed with living children.\n");
+		USLOSS_Console("ERROR: Process pid %d called quit() while it still had children.\n", currentProcess->pid);
 		USLOSS_Halt(1);
 	}
 	currentProcess->exitStatus = status;
@@ -236,21 +236,21 @@ extern void dumpProcesses(void) {
 			ppid = p.parent->pid;
 		}
 		char pid_ind[] = {'\0', '\0', '\0'};
-		if (p.pid < 10) {
+		if (p.pid < 100) {
 			pid_ind[0] = ' ';
 		}
-		if (p.pid < 1000) {
+		if (p.pid < 10) {
 			pid_ind[1] = ' ';
 		}
 		char ppid_ind[] = {'\0', '\0', '\0'};
-		if (ppid < 10) {
+		if (ppid < 100) {
 			ppid_ind[0] = ' ';
 		}
-		if (ppid < 1000) {
+		if (ppid < 10) {
 			ppid_ind[1] = ' ';
 		}
-		USLOSS_Console(" %s%d     %d%s %s%s%d         %s\n",
-			pid_ind, p.pid, ppid, ppid_ind, p.name, name_indent, p.priority, state);
+		USLOSS_Console(" %s%d   %s%d  %s%s%d         %s\n",
+			pid_ind, p.pid, ppid_ind, ppid, p.name, name_indent, p.priority, state);
 	}
 }
 
@@ -333,11 +333,8 @@ unsigned int set_psr_flag(unsigned int flag, bool on) {
 	} else {
 		newPsr = oldPsr & ~flag;
 	}
-	int result = USLOSS_PsrSet(newPsr);
-	if (result != USLOSS_DEV_OK) {
-		USLOSS_Console("PsrSet returned %d.\n", result);
-		USLOSS_Halt(1);
-	}
+	// not REstoring, just storing
+	restore_psr_state(newPsr);
 	return oldPsr;
 }
 
