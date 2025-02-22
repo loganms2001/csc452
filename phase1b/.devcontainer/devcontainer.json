@@ -1,0 +1,22 @@
+{
+    "name": "USLOSS Dev Container - 1b",
+    "image": "ghcr.io/russ-lewis/usloss",
+    "workspaceFolder": "/root",
+    "mounts": [
+      "source=${localWorkspaceFolder},target=/root/phase1b,type=bind"
+    ],
+    "customizations": {
+    "vscode": {
+        "extensions": [
+          "ms-python.debugpy",
+          "ms-python.python",
+          "ms-python.vscode-pylance",
+          "ms-vscode.cmake-tools",
+          "ms-vscode.cpptools",
+          "ms-vscode.cpptools-extension-pack",
+          "ms-vscode.cpptools-themes",
+          "ms-vscode.makefile-tools"
+        ]
+      }
+    }
+}

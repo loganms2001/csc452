@@ -1,6 +1,6 @@
 /*
 * Authors: Logan Sandlin and Christopher Le
-* Phase 1-a
+* Phase 1-b
 *
 */
 
@@ -9,7 +9,8 @@
 Process processTable[MAXPROC];
 Process *currentProcess = NULL;
 int availableProcSlots = MAXPROC;
-int PID = 1;
+int PID = INIT_PID;
+bool no_dispatch = false;
 
 /// @brief Initial invocation is here. Creates init process.
 void phase1_init() {
@@ -21,7 +22,7 @@ void phase1_init() {
 		processTable[i].status = AVAILABLE;
 	}
 	
-	Process *init = &processTable[1];
+	Process *init = &processTable[PID];
 
 	// Initialize init process (PID 1)
 	int stackSize = USLOSS_MIN_STACK;
@@ -34,18 +35,21 @@ void phase1_init() {
 	init->pid = PID;
 	init->priority = 6; // priority for init
 	init->status = READY;
+	init->blockStatus = BLOCK_ON_COMMAND;
 	init->exitStatus = 0xBEEF;
 	init->stackSize = stackSize;
 	init->stack = stack;
 	init->startFunc = init_entry;
 	init->arg = NULL;
+	init->zapList[0] = 0;
+	init->startTime = -1;
 
 	// context defined above
 
 	init->parent = NULL;
 	init->firstChild = NULL;
 	init->nextSibling = NULL;
-	init->nextRun = NULL;
+	init->nextReady = NULL;
 
 	restore_psr_state(oldPsr);
 
@@ -67,11 +71,13 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 
 	// check for invalid args
 	if (strlen(name) > MAXNAME || !startFunc || priority > 5 || priority < 1) {
+		// error message?
 		return -1;
 	}
 
 	// check to make sure there is room in the process table
 	if (availableProcSlots < 1) {
+		// error message?
 		return -1;
 	}
 
@@ -101,20 +107,27 @@ int spork(char *name, int (*startFunc)(void *), void *arg, int stackSize, int pr
 	newProc->stack = stack;
 	newProc->startFunc = startFunc;
 	newProc->arg = arg;
+	newProc->zapList[0] = 0;
+	newProc->startTime = -1;
 
 	// context defined above
 
 	newProc->parent = currentProcess;
 	newProc->firstChild = NULL;
-	// nextSibling is defined below
-	// nextRun is defined below
+
+	// nextReady is set in here
+	insert_priority_tail(currentProcess, newProc);
 	
-	availableProcSlots--;
+	// nextSibling is defined below
 	
 	// inserts at head
 	Process *temp = currentProcess->firstChild;
 	currentProcess->firstChild = &processTable[PID % MAXPROC];
 	currentProcess->firstChild->nextSibling = temp;
+	
+	availableProcSlots--;
+
+	dispatcher();
 
 	restore_psr_state(oldPsr);
 
@@ -141,8 +154,21 @@ int join(int *status) {
 		return -2;
 	}
 
+	// may not be successful
 	Process *prevChild = NULL;
 	Process *curChild = currentProcess->firstChild;
+	while (curChild->nextSibling != NULL && curChild->status != TERMINATED) {
+		prevChild = curChild;
+		curChild = curChild->nextSibling;
+	}
+
+	if (curChild->status != TERMINATED) {
+		blockMe_wrapper(BLOCK_ON_CHILD);
+	}
+
+	// will certainly be successful
+	prevChild = NULL;
+	curChild = currentProcess->firstChild;
 	while (curChild->nextSibling != NULL && curChild->status != TERMINATED) {
 		prevChild = curChild;
 		curChild = curChild->nextSibling;
@@ -164,18 +190,38 @@ int join(int *status) {
 	return curChild->pid;
 }
 
-/// @brief Exits current running process / changes status to terminated and transfers control
-///			to switchToPid (will call dispatcher).
+/// @brief Exits current running process / changes status to terminated 
+///			and calls dispatcher.
 /// @param status Status to exit process with
-/// @param switchToPid TEMP PID to switch to after process is complete
-extern void quit_phase_1a(int status, int switchToPid) {
+extern void quit(int status) {
 	check_kernel_true(__func__);
 	if (!check_no_children()) {
 		USLOSS_Console("ERROR: Process pid %d called quit() while it still had children.\n", currentProcess->pid);
 		USLOSS_Halt(1);
 	}
 	currentProcess->exitStatus = status;
-	switch_context(currentProcess->pid, TERMINATED, switchToPid);
+	currentProcess->status = TERMINATED;
+	
+	no_dispatch = true;
+
+	int lenZapList = currentProcess->zapList[0];
+	for (int i=lenZapList; i > 0; i--) { // zap stack instead of queue, don't like it tbh
+		unblockProc(currentProcess->zapList[i]);
+	}
+	currentProcess->zapList[0] = 0;
+
+	no_dispatch = false;
+
+	unblockProc(currentProcess->parent->pid);
+
+	dispatcher();
+
+	// should never context switch back to here
+	USLOSS_Console("ERROR: Process pid %d called quit() and came back to life.\n", currentProcess->pid);
+	USLOSS_Halt(1);
+
+	// gets rid of a warning
+	exit(1);
 }
 
 /// @brief Returns PID of current process.
@@ -194,8 +240,9 @@ extern int getpid() {
 
 /// @brief Prints current active processtable
 extern void dumpProcesses() {
-	char state[32];
+	char state[64];
 	char name_indent[32];
+	char block_status[32];
 	int ind_len;
 	USLOSS_Console(" PID  PPID  NAME              PRIORITY  STATE\n");
 	for (int i = 0; i < MAXPROC; i++) {
@@ -214,13 +261,32 @@ extern void dumpProcesses() {
 			strncpy(state, "Running", 16);
 		break;
 
+		case BLOCKED:
+			switch (p.blockStatus)
+			{
+			case BLOCK_ON_CHILD:
+				strncpy(block_status, "waiting for child to quit", 32);
+			break;
+
+			case BLOCK_ON_ZAP:
+				strncpy(block_status, "waiting for zap target to quit", 32);
+			break;
+			
+			default:
+				block_status[0] = '3';
+				block_status[1] = '\0';
+			break;
+			}
+			snprintf(state, 64, "Blocked(%s)", block_status);
+		break;
+
 		case TERMINATED:
-			sprintf(state, "Terminated(%d)", processTable[i].exitStatus);
+			snprintf(state, 32, "Terminated(%d)", processTable[i].exitStatus);
 		break;
 
 		default:
 			strncpy(state, "UNUSED", 16);
-			break;
+		break;
 		}
 		int ppid;
 		if (p.parent == NULL) {
@@ -228,6 +294,11 @@ extern void dumpProcesses() {
 		} else {
 			ppid = p.parent->pid;
 		}
+		// if (p.nextReady == NULL) {
+		// 	ppid = 0;
+		// } else {
+		// 	ppid = p.nextReady->pid;
+		// }
 		char pid_ind[] = {'\0', '\0', '\0'};
 		if (p.pid < 100) {
 			pid_ind[0] = ' ';
@@ -247,19 +318,116 @@ extern void dumpProcesses() {
 	}
 }
 
-/// @brief Switches contexts to the given function
-/// @param pid PID of the function to switch to
-void TEMP_switchTo(int pid) {
-	check_kernel_true(__func__);
-	switch_context(PID, READY, pid);
+/// @brief Switches context to the next scheduled context
+void dispatcher() {
+	// // debug
+	// USLOSS_Console("Dispatcher called.\n");
+	Process *nextProcess = NULL;
+	if (currentProcess == NULL) {
+		nextProcess = &processTable[INIT_PID];
+	} else if (currentProcess->status == TERMINATED || currentProcess->status == BLOCKED) {
+		nextProcess = currentProcess->nextReady;
+	} else {
+		if (currentProcess->nextReady != NULL && (currentProcess->nextReady->priority < currentProcess->priority // normal switch
+			|| (currentProcess->nextReady->priority == currentProcess->priority && quantum_expired()))) { // clock switch
+			nextProcess = currentProcess->nextReady;
+			// nextProcess->nextReady set in here
+			insert_priority_tail(nextProcess, currentProcess);
+		}
+	}
+	if (nextProcess != NULL) {
+		switch_context(nextProcess);
+	}
+}
+
+void blockMe_wrapper(int status) {
+	currentProcess->blockStatus = status;
+	blockMe();
+}
+
+void blockMe() {
+	currentProcess->status = BLOCKED;
+	dispatcher();
+}
+
+int unblockProc(int pid) {
+	Process *proc = &processTable[pid % MAXPROC];
+	if (proc->status == BLOCKED) {
+		proc->status = READY;
+		currentProcess->blockStatus = BLOCK_ON_COMMAND;
+		insert_priority_tail(currentProcess, proc);
+		if (!no_dispatch) dispatcher();
+		return 0;
+	}
+	return -2;
+}
+
+void zap(int pid) {
+	Process *proc = &processTable[pid % MAXPROC];
+	// error check for: zap self
+	if (proc == currentProcess) {
+		USLOSS_Console("ERROR: Attempt to zap() itself.\n");
+		USLOSS_Halt(1);
+	}
+	// error check for: proc nonexist
+	if (proc->pid != pid || proc->status == AVAILABLE) {
+		USLOSS_Console("ERROR: Attempt to zap() a non-existent process.\n");
+		USLOSS_Halt(1);
+	}
+	// error check for: proc dead
+	if (proc->status == TERMINATED) {
+		USLOSS_Console("ERROR: Attempt to zap() a process that is already in the process of dying.\n");
+		USLOSS_Halt(1);
+	}
+	// error check for: proc init
+	if (pid == INIT_PID) {
+		USLOSS_Console("ERROR: Attempt to zap() init.\n");
+		USLOSS_Halt(1);
+	}
+
+	int curZapLen = proc->zapList[0];
+	proc->zapList[curZapLen+1] = currentProcess->pid;
+	proc->zapList[0] = curZapLen+1;
+	blockMe_wrapper(BLOCK_ON_ZAP);
 }
 
 ////////////////  HELPERS  ////////////////
 
+bool quantum_expired() {
+	double ms_elapsed = ((double)(clock() - currentProcess->startTime) / CLOCKS_PER_SEC) * 1000;
+	bool expired = ms_elapsed >= QUANTUM_MS;
+	return expired;
+}
+
+void insert_priority_tail(Process *front, Process *proc) {
+	if (proc->pid == INIT_PID) {
+		proc->nextReady = NULL;
+	}
+
+	Process *newHead = front->nextReady;
+	if (newHead == NULL) {
+		newHead = proc;
+		proc->nextReady = front;
+	} else if (proc->priority < newHead->priority) {
+		proc->nextReady = newHead;
+		newHead = proc;
+	} else {
+		Process *cur = newHead;
+		while (cur->nextReady != NULL && cur->nextReady->priority <= proc->priority) {
+			cur = cur->nextReady;
+		}
+		Process *temp = cur->nextReady;
+		cur->nextReady = proc;
+		proc->nextReady = temp;
+	}
+	
+	front->nextReady = newHead;
+}
+
 /// @brief Entry function for init process
 /// @param  UNUSED No param is passed to init
 /// @return Should never return
-int init_entry(void *) {
+int init_entry(void *unused) {
 	enter_kernel_mode();
 
 	phase2_start_service_processes();
@@ -267,11 +435,8 @@ int init_entry(void *) {
 	phase4_start_service_processes();
 	phase5_start_service_processes();
 
-	int newPid = spork("testcase_main", testcase_main, NULL, USLOSS_MIN_STACK, 3);
-	USLOSS_Console("Phase 1A TEMPORARY HACK: init() manually switching to testcase_main() after using spork() to create it.\n");
-	switch_context(currentProcess->pid, READY, newPid);
+	spork("testcase_main", (int (*)(void *)) testcase_main, NULL, USLOSS_MIN_STACK, 3);
 	
-	// dispatcher called in spork
 	int status = 0;
 	while (true) {
 		if (join(&status) == -2) {
@@ -281,7 +446,10 @@ int init_entry(void *) {
 			USLOSS_Halt(status);
 		}
 	}
-	return -99; // doesn't run
+
+	// doesn't run
+	USLOSS_Halt(1);
+	return -99;
 }
 
 /// @brief Wrapper for catching function returns in functions called by USLOSS. Temp since 
@@ -290,26 +458,28 @@ void func_wrapper() {
 	unsigned int oldPsr = enable_interrupts();
 	int returncode = currentProcess->startFunc(currentProcess->arg);
 	restore_psr_state(oldPsr);
-	USLOSS_Console("Phase 1A TEMPORARY HACK: %s() returned, simulation will now halt.\n", currentProcess->name);
-	quit_phase_1a(returncode, currentProcess->parent->pid);
+	quit(returncode);
 }
 
 /// @brief Switches contexts from old PID to new
 /// @param old_pid Old PID
 /// @param status Status to switch the old process to
 /// @param newPid New PID
-void switch_context(int old_pid, int status, int newPid) {
+void switch_context(Process *newProcess) {
 	check_kernel_true(__func__);
 	USLOSS_Context *old_context;
 	if (currentProcess != NULL) {
 		old_context = &currentProcess->context;
-		currentProcess->status = status;
+		if (currentProcess->status == RUNNING) {
+			currentProcess->status = READY;
+		}
 	} else {
 		old_context = NULL;
 	}
-	// insert at tail of run queue
-	currentProcess = &processTable[newPid % MAXPROC];
+	// insert at tail of ready queue
+	currentProcess = newProcess;
 	currentProcess->status = RUNNING;
+	currentProcess->startTime = clock();
 
 	USLOSS_ContextSwitch(old_context, &currentProcess->context);
 }

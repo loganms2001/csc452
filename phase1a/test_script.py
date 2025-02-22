@@ -30,5 +30,10 @@ for i in range(len(test_outs)):
     
     # print(re.sub("\\\\n", "\n", str(diff.stdout)))
 
+all_passed = True
 for case in sorted(failed):
+    all_passed = False
     print(f"Failed: {case}")
+
+if all_passed:
+    print("All testcases passed!")
