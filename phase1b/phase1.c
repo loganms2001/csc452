@@ -394,7 +394,7 @@ void zap(int pid) {
 ////////////////  HELPERS  ////////////////
 
 bool quantum_expired() {
-	double ms_elapsed = ((double)(clock() - currentProcess->startTime) / CLOCKS_PER_SEC) * 1000;
+	double ms_elapsed = ((double)(currentTime() - currentProcess->startTime)) / 1000; // ((double)(clock() - currentProcess->startTime) / CLOCKS_PER_SEC) * 1000;
 	bool expired = ms_elapsed >= QUANTUM_MS;
 	return expired;
 }
@@ -479,7 +479,7 @@ void switch_context(Process *newProcess) {
 	// insert at tail of ready queue
 	currentProcess = newProcess;
 	currentProcess->status = RUNNING;
-	currentProcess->startTime = clock();
+	currentProcess->startTime = currentTime();
 
 	USLOSS_ContextSwitch(old_context, &currentProcess->context);
 }

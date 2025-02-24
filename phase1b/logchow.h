@@ -5,7 +5,6 @@
 #include <stdbool.h>
 // #include <stdint.h>
 #include <string.h>
-#include <time.h>
 #include "phase1.h"
 
 // Process statuses
@@ -32,7 +31,7 @@ typedef struct process {
     void *stack;
     int (*startFunc)(void *);
     void *arg;
-    clock_t startTime;
+    int startTime;
     int zapList[MAXPROC];
     USLOSS_Context context;
     struct process *parent;
